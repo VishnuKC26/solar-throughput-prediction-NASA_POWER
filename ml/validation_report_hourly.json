@@ -1,0 +1,17 @@
+{
+  "ensemble_model": {
+    "MAE": 0.0,
+    "RMSE": 0.0,
+    "R2": 1.0,
+    "MAPE": 0.0,
+    "NMAE_percent_of_mean": 0.0
+  },
+  "baseline": {
+    "MAE": 0.0,
+    "baseline_type": "train_mean_climatology_hourly",
+    "baseline_mean": 0.0
+  },
+  "improvement_percent_vs_baseline": 0.0,
+  "test_samples": 149,
+  "train_samples": 593
+}

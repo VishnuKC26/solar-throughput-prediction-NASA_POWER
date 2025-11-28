@@ -1,0 +1,8 @@
+# ml/requirements.txt
+requests
+pandas
+numpy
+scikit-learn
+xgboost
+joblib
+python-dotenv

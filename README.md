@@ -2,24 +2,40 @@
 
 This project provides an end-to-end solar forecasting system using NASA POWER datasets. It processes historical meteorological features, applies machine learning models to estimate solar energy throughput, and exposes a lightweight interface for predictions.
 
+## Overview
+
+The ML pipeline consists of 6 tightly interconnected stages, each implemented in a dedicated Python file:
+
+1. **Data Ingestion** - `ml/ingest_nasa.py`
+2. **Physical Energy Conversion** - `ml/features.py`
+3. **Time-Series Feature Engineering** - `ml/features.py`
+4. **Model Training + Validation** - `ml/train_xgb.py`
+5. **Prediction Engine** - `ml/predict.py`
+6. **Runtime Executor for Dashboard** - `ml_runner.py`
+
 ## Features
 
 - Automated data ingestion from NASA POWER API
-- Preprocessing, cleaning, and feature engineering for solar radiation datasets
-- Multiple machine learning models for prediction (XGBoost, Random Forest, Linear Regression, etc.)
-- Evaluation of model performance with metrics and comparative analysis
-- End-to-end forecasting pipeline integrated into a full-stack application
-- Optional real-time prediction interface using Streamlit or API endpoints
+- Physical conversion of irradiance to energy output
+- Time-series feature engineering with lag and rolling features
+- Ensemble machine learning models (XGBoost, LightGBM, Random Forest)
+- Climatology baseline comparison for deviation detection
+- Evaluation with multiple performance metrics (MAE, RMSE, R², SMAPE, NMAE)
+- Subprocess-based runtime executor for safe dashboard integration
+- JSON-based prediction output format
 
 ## Data Source
 
-The project uses the **NASA POWER** (Prediction Of Worldwide Energy Resources) API, which provides global meteorological and solar parameters at daily resolution. Relevant variables include:
+The project uses the **NASA POWER** (Prediction Of Worldwide Energy Resources) API, which provides global meteorological and solar parameters at daily resolution:
 
-- Solar irradiance components
-- Temperature
-- Humidity
-- Wind speed
-- Cloud coverage
+- **Global Horizontal Irradiance (GHI)** - `ALLSKY_SFC_SW_DWN`
+- **Temperature** - `T2M`
+- **Relative Humidity** - `RH2M`
+- **Cloud Coverage** - `CLD` (computed)
+
+API Endpoint: `https://power.larc.nasa.gov/api/temporal/daily/point`
+
+**Note:** NASA POWER data has a 30-45 day latency, so the system requests older windows (45-150 days ago).
 
 ## Project Structure
 
@@ -27,90 +43,220 @@ The project uses the **NASA POWER** (Prediction Of Worldwide Energy Resources) A
 project-root/
 │
 ├── ml/
-│   ├── ingest_nasa.py        # Data ingestion scripts
-│   ├── preprocess.py         # Cleaning and feature engineering
-│   ├── train_models.py       # Model training and evaluation
-│   ├── predict.py            # Prediction logic
-│   ├── models/               # Saved model artifacts
+│   ├── ingest_nasa.py        # Data ingestion from NASA POWER API
+│   ├── features.py           # Physical conversion and feature engineering
+│   ├── train_xgb.py          # Model training and validation
+│   ├── predict.py            # Prediction engine
+│   ├── models/               # Saved model artifacts (.joblib)
 │   └── datasets/             # Raw and processed data
 │
-├── frontend/                 # Optional dashboard or UI
-├── backend/                  # Optional API layer
+├── ml_runner.py              # Runtime executor for dashboard
 ├── requirements.txt
 └── README.md
 ```
 
 ## Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-username/your-repo.git
-   cd your-repo
-   ```
+### Requirements
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate  # On Windows
-   # source venv/bin/activate  # On macOS/Linux
-   ```
+- Python 3.9+
+- pandas
+- numpy
+- xgboost
+- lightgbm
+- scikit-learn
+- requests
+- joblib
+- reportlab (optional)
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
-### Run the NASA Data Ingestion
+### Train a Model
+
 ```bash
-python ml/ingest_nasa.py
+python ml/train_xgb.py --lat 28.6139 --lon 77.2090 --area 1 --eff 0.18
 ```
 
-### Preprocess Data
+### Run a Prediction
+
 ```bash
-python ml/preprocess.py
+python ml_runner.py --lat 28.6139 --lon 77.2090 --area 1 --eff 0.18
 ```
 
-### Train Models
-```bash
-python ml/train_models.py
-```
+### Generate Predictions (Direct)
 
-### Generate Predictions
 ```bash
 python ml/predict.py
 ```
 
-### If using the UI (Streamlit):
-```bash
-streamlit run app.py
+## Pipeline Stages
+
+### 1. Data Ingestion (`ml/ingest_nasa.py`)
+
+Fetches daily solar and weather data from NASA POWER API.
+
+**Key Function:** `fetch_nasa_power(lat, lon, start, end)`
+
+**Processing:**
+- Handles NASA's missing values (-999 → NaN)
+- Adds dummy cloud cover column for model compatibility
+- Returns daily dataframe with date, irradiance, temperature, humidity, and cloud cover
+
+### 2. Physical Energy Conversion (`ml/features.py`)
+
+Converts NASA's irradiance (kWh/m²/day) into solar panel energy output (kWh/day).
+
+**Formula:**
+```
+energy = GHI × panel_area_m² × efficiency × performance_ratio
 ```
 
-## Model Overview
+**Defaults:**
+- Area = 1.0 m²
+- Efficiency = 18%
+- Performance Ratio = 0.75 (loss correction)
 
-The system supports and compares multiple ML algorithms:
+**Key Function:** `estimate_production_from_irradiance(df)`
 
-- **Gradient Boosted Trees** (XGBoost)
-- **Random Forest Regressor**
-- **Linear Regression**
-- **Ensemble and hybrid approaches**
+### 3. Time-Series Feature Engineering (`ml/features.py`)
 
-The final model is selected based on key performance metrics such as **RMSE**, **MAE**, and **R²**.
+Creates temporal features for seasonal patterns and trends.
 
-## Key Outcomes
+**Features Added:**
 
-- Predicts solar throughput for selected coordinates
-- Enables planning for solar installations and energy forecasting
-- Provides reproducible and automated data workflows
-- Designed for deployment in web-based or API-driven environments
+| Feature | Meaning |
+|---------|---------|
+| dayofyear | Seasonal signal (1-365) |
+| prod_lag1 | Yesterday's production |
+| prod_ma3 | 3-day moving average |
+| prod_ma7 | 7-day moving average |
+
+**Key Function:** `add_time_and_rolling(df)`
+
+### 4. Model Training & Validation (`ml/train_xgb.py`)
+
+Trains an ensemble model and evaluates against a climatology baseline.
+
+**Models Used:**
+- XGBoost Regressor
+- LightGBM Regressor
+- Random Forest Regressor
+- Combined using VotingRegressor
+
+**Validation Method:**
+- Chronological split (80% train, 20% test)
+- Metrics: MAE, RMSE, R², SMAPE, NMAE
+
+**Baseline:**
+Train-period mean energy output (average daily prediction)
+
+**Output Files:**
+- `ensemble_model.joblib`
+- `validation_report.json`
+
+### 5. Prediction Engine (`ml/predict.py`)
+
+Generates future solar production forecasts for N days.
+
+**Steps:**
+1. Fetch NASA POWER data (older window)
+2. Convert irradiance to energy
+3. Build rolling features
+4. Compute climatology baseline (same day-of-year average)
+5. Predict next N days
+6. Calculate deviation from baseline
+
+**Output Example (JSON):**
+```json
+{
+  "predictions": [
+    {
+      "date": "2025-12-01",
+      "pred_kwh": 0.45,
+      "baseline_kwh": 0.38,
+      "deviation_kwh": 0.07
+    }
+  ],
+  "baseline": 0.38
+}
+```
+
+### 6. Runtime Executor (`ml_runner.py`)
+
+Provides a safe interface for the dashboard to call the ML pipeline.
+
+**Responsibilities:**
+- Executes `predict.py` in a subprocess
+- Captures stdout (valid JSON)
+- Captures stderr for debugging
+- Passes final JSON to frontend
+
+## End-to-End Flow
+
+```
+Dashboard → ml_runner.py
+              ↓
+          predict.py
+              ↓
+      ingest_nasa.py  → NASA POWER API
+              ↓
+           features.py
+              ↓
+         Model Loaded (.joblib)
+              ↓
+        Predictions JSON
+              ↓
+          Dashboard UI
+```
+
+## Deviation Alerts Logic
+
+### Baseline
+Computed using climatology (same day-of-year average over historical data).
+
+### Deviation
+```
+deviation = pred_kwh - baseline_kwh
+```
+
+### Interpretation
+- **Negative deviation** → underperformance → alert triggered
+- **Positive deviation** → overperformance → normal operation
+
+## Model Performance Metrics
+
+- **MAE** (Mean Absolute Error) - Average prediction error
+- **RMSE** (Root Mean Square Error) - Penalizes large errors
+- **R²** (Coefficient of Determination) - Variance explained
+- **SMAPE** (Symmetric Mean Absolute Percentage Error) - Relative error
+- **NMAE** (Normalized Mean Absolute Error) - Scaled error metric
 
 ## Future Enhancements
 
-- Integration of deep learning models
-- Forecasting for multiple spatial points simultaneously
-- Long-term prediction capabilities
-- Deployment via Docker or cloud services
+- Multi-year climatology baseline (5+ years of historical data)
+- Weather forecast API integration for future T2M, RH2M, CLD
+- Confidence intervals for predictions
+- Monthly automatic model retraining
+- Support for different panel types and installation angles
+- Deep learning models (LSTM, Transformers)
+- Multi-location simultaneous forecasting
+- Docker containerization for deployment
+- Cloud deployment (AWS, Azure, GCP)
+
+## Key Outcomes
+
+- Predicts solar throughput for selected coordinates with high accuracy
+- Enables planning for solar installations and energy forecasting
+- Provides reproducible and automated data workflows
+- Designed for deployment in web-based or API-driven environments
+- Combines physical modeling with modern machine learning techniques
+- Production-ready architecture supporting research and real-world deployment
 
 ## License
 
